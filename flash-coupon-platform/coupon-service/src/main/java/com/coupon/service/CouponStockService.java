@@ -1,0 +1,67 @@
+package com.coupon.service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.stereotype.Service;
+
+import java.util.Arrays;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class CouponStockService {
+
+    private static final String STOCK_KEY_PREFIX = "coupon:stock:";
+    private static final String ISSUED_KEY_PREFIX = "coupon:issued:";
+
+    private final RedisTemplate<String, Long> redisTemplate;
+    private final DefaultRedisScript<Long> stockDecrementScript;
+
+    /**
+     * Redis에 쿠폰 재고 초기화
+     */
+    public void initializeStock(Long couponId, Integer quantity) {
+        String stockKey = STOCK_KEY_PREFIX + couponId;
+        redisTemplate.opsForValue().set(stockKey, quantity.longValue());
+        log.info("쿠폰 재고 초기화 - couponId: {}, quantity: {}", couponId, quantity);
+    }
+
+    /**
+     * Lua Script를 통한 원자적 재고 감소
+     * @return 1: 성공, 0: 재고 없음, -1: 이미 발급됨
+     */
+    public Long decrementStock(Long couponId, Long userId) {
+        String stockKey = STOCK_KEY_PREFIX + couponId;
+        String issuedKey = ISSUED_KEY_PREFIX + couponId;
+
+        Long result = redisTemplate.execute(
+                stockDecrementScript,
+                Arrays.asList(stockKey, issuedKey),
+                userId.toString()
+        );
+
+        log.debug("재고 감소 시도 - couponId: {}, userId: {}, result: {}", couponId, userId, result);
+        return result;
+    }
+
+    /**
+     * 현재 남은 재고 조회
+     */
+    public Long getStock(Long couponId) {
+        String stockKey = STOCK_KEY_PREFIX + couponId;
+        Long stock = redisTemplate.opsForValue().get(stockKey);
+        return stock != null ? stock : 0L;
+    }
+
+    /**
+     * 사용자가 이미 발급받았는지 확인
+     */
+    public boolean isAlreadyIssued(Long couponId, Long userId) {
+        String issuedKey = ISSUED_KEY_PREFIX + couponId;
+        return Boolean.TRUE.equals(
+                redisTemplate.opsForSet().isMember(issuedKey, userId.toString())
+        );
+    }
+}
